@@ -101,15 +101,19 @@ object Main {
 
     // Paso 6: detectar entidades
     val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)
-
-    val allEntities = filteredPosts.flatMap { post =>
+    val countRDD = filteredPosts.flatMap { post =>                                   
       val combinedText = post.title + " " + post.selftext
       Analyzer.detectEntities(combinedText, dictionary)
     }
+    .map { e => ((e.entityType, e.text), 1) }           
+    .reduceByKey((x, y) => x + y)                        
 
-    val allEntityList = allEntities.collect().toList
-    val entityCounts  = Analyzer.countEntities(allEntityList)
-    val typeStats     = Analyzer.countByType(allEntityList)
+
+    val entityCounts = countRDD.collect().toMap
+    val allEntityList = filteredPosts.flatMap { post =>
+      Analyzer.detectEntities(post.title + " " + post.selftext, dictionary)
+    }.collect().toList
+    val typeStats = Analyzer.countByType(allEntityList)
 
     println(Formatters.formatTypeStats(typeStats))
     println()
