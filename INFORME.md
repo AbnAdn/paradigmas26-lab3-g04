@@ -92,3 +92,29 @@ El diccionario se lee en el **driver**, mediante `Dictionary.loadAll(cmdArgs.ent
 Si la lectura se realizara dentro del `flatMap`, cada worker intentaría acceder al archivo desde su propio sistema de archivos. En un cluster real, los workers son máquinas distintas que no tienen acceso al filesystem del driver, por lo que la lectura fallaría. Leer el diccionario en el driver y dejar que Spark lo distribuya es el patrón correcto para este tipo de dato de referencia compartido.
 
 
+## Ejercicio 4 — Monitoreo del éxito de las tareas
+
+### ¿Por qué los Accumulators solo deben usarse para métricas y no para tomar decisiones lógicas dentro de las etapas distribuidas del pipeline?
+
+Los Accumulators son variables que únicamente los workers pueden incrementar y únicamente el driver puede leer. Esta asimetría es intencional y genera una limitación crítica: su valor no es visible ni consistente dentro de las transformaciones distribuidas. Por eso, los Accumulators son confiables solo para métricas de observabilidad leídas por el driver después de una acción terminal, nunca como fuente de verdad para lógica de negocio.
+
+### ¿En qué situación un Accumulator puede dar un valor incorrecto?
+
+Spark puede re-ejecutar tasks en caso de fallo de un nodo o de un worker. Si una task falla y se vuelve a ejecutar, los incrementos de esa task se contabilizan dos veces, porque Spark no garantiza exactly-once semantics para los Accumulators dentro de transformaciones. Solo las acciones garantizan que cada task se cuenta una sola vez.
+
+### ¿En qué momento del pipeline está disponible el valor de un Accumulator para ser leído por el driver?
+
+El valor de un Accumulator está disponible y es correcto únicamente después de que una acción terminal completa su ejecución.
+Antes de la acción terminal, las transformaciones no se ejecutaron: el Accumulator tiene valor 0. Durante la acción terminal, Spark ejecuta el DAG y los workers actualizan el Accumulator. Una vez que la acción termina y el control regresa al driver, el valor está consolidado y es seguro leerlo.
+Los dos momentos correctos de lectura serian:
+Despues de filteredPosts.count(): se pueden leer feedsSuccess, feedsFailed, postsSuccess y postsFilteredAcc con valores correctos, y 
+despues de countRDD.collect(): no hay nuevos Accumulators en esa etapa, pero los anteriores mantienen su valor final.
+
+### Comparacion del tiempo en la version paralelizada y version con Spark
+
+Resultados observados:
+
+             Etapa             |     Versión secuencial     |     Versión Spark     |
+Descarga de feeds + filtrado   |            XX              |            XX         |
+Detección NER + agregación     |            XX              |            XX         |
+Total                          |            XX              |            XX         |
