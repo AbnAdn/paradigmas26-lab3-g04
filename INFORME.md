@@ -70,6 +70,12 @@ Efectos Secundarios: Las funciones deben ser puras en lo posible. Spark provee t
 
 ## Ejercicio 2 — Paralelizar la descarga de feeds
 
+### ¿Qué pasaría si dejaran propagar la excepción en el flatMap?
+
+Sin el bloque `try/catch`, Spark reintentaría la tarea fallida hasta 4 veces y luego cancelaría el job completo. Un solo feed caído tiraría abajo todo el procesamiento, perdiendo los posts de los feeds que sí funcionaban.
+
+La implementación correcta atrapa la excepción, incrementa `feedsFailed` y devuelve `Iterator.empty[Post]`, permitiendo que el resto de los feeds continúen procesándose normalmente.
+
 ## Ejercicio 3 — Paralelizar el cómputo de entidades nombradas
 
 ### ¿Qué ocurre en el cluster en `reduceByKey`? ¿Por qué es inevitable para este problema?
@@ -118,3 +124,11 @@ Resultados observados:
 Descarga de feeds + filtrado   |            XX              |            XX         |
 Detección NER + agregación     |            XX              |            XX         |
 Total                          |            XX              |            XX         |
+
+### ¿Por qué es incorrecto llamar a collect() entre los pasos a) y b) del ejercicio 3 y luego continuar el pipeline? ¿Qué consecuencia tiene sobre la distribución del trabajo?
+
+`collect()` es una acción terminal que materializa todo el RDD en la memoria del driver. Si se llama entre el `flatMap` (paso a) y el `map` (paso b), el resultado deja de ser un RDD distribuido y se convierte en una colección Scala local. A partir de ese punto, el `map` y el `reduceByKey` se ejecutan en el driver de forma secuencial, eliminando toda la paralelización. En lugar de distribuir el trabajo entre workers, un solo nodo procesa todas las entidades — creando un cuello de botella y perdiendo el beneficio de Spark.
+
+### cache() es lazy. ¿En qué momento se almacena realmente el RDD en memoria?
+
+Llamar a `.cache()` solo marca el RDD como "a persistir", pero no ejecuta nada inmediatamente. El almacenamiento real ocurre cuando se ejecuta la primera acción terminal sobre ese RDD — en este caso, `filteredPosts.count()`. En ese momento Spark materializa las particiones y las guarda en memoria. Las acciones siguientes sobre el mismo RDD ya leen desde la caché en lugar de recomputar.
