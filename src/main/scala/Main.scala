@@ -41,10 +41,12 @@ object Main {
     // Paso 2: paralelizar y descargar feeds
     val subsParallelized = sc.parallelize(subscriptions)
 
+    // Acumuladores
     val feedsSuccess = sc.longAccumulator("feedsOk")
     val feedsFailed  = sc.longAccumulator("feedsFailed")
     val postsSuccess = sc.longAccumulator("postsSuccess")
     val postsFailed  = sc.longAccumulator("postsFailed")
+    val postsFilteredAcc = sc.longAccumulator("postsFiltered")
 
     val postsRDD: RDD[Post] = subsParallelized.flatMap { sub =>
       try {
@@ -69,11 +71,26 @@ object Main {
     }
 
     // Paso 3: filtrar posts vacíos
-    val filteredPosts = postsRDD
-      .filter(p => p.title.nonEmpty && p.selftext.nonEmpty)
+    val filteredPosts = postsRDD 
+      .filter { p =>
+        val valid = p.title.trim.nonEmpty && p.selftext.trim.nonEmpty
+
+        if (!valid) postsFilteredAcc.add(1)
+        valid
+      }
       .cache()
 
+    // Accion terminal
+    val t0 = System.currentTimeMillis()
     val totalFilteredPosts = filteredPosts.count()
+    val t1 = System.currentTimeMillis()
+
+    // Imprimimos acumuladores
+    println(s"Feeds downloaded successfully : ${feedsSuccess.value}")
+    println(s"Feeds failed                  : ${feedsFailed.value}")
+    println(s"Posts downloaded              : ${postsSuccess.value}")
+    println(s"Posts filtered (empty)        : ${postsFilteredAcc.value}")
+    println()
 
     // Paso 4: chequear si hay posts
     if (totalFilteredPosts == 0) {
@@ -85,14 +102,13 @@ object Main {
     // Paso 5: calcular métricas
     val totalChars   = filteredPosts.map(p => p.title.length + p.selftext.length).sum()
     val avgChars     = totalChars / totalFilteredPosts
-    val postsFiltered = postsSuccess.value - totalFilteredPosts
 
     val stats = Map(
       "feedsSuccess"  -> feedsSuccess.value.toInt,
       "feedsFailed"   -> feedsFailed.value.toInt,
       "postsSuccess"  -> postsSuccess.value.toInt,
       "postsFailed"   -> postsFailed.value.toInt,
-      "postsFiltered" -> postsFiltered.toInt,
+      "postsFiltered" -> postsFilteredAcc.value.toInt,
       "avgChars"      -> avgChars.toInt
     )
 
@@ -101,22 +117,32 @@ object Main {
 
     // Paso 6: detectar entidades
     val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)
-    val countRDD = filteredPosts.flatMap { post =>                                   
+    val t2 = System.currentTimeMillis()
+    val allEntitiesRDD = filteredPosts.flatMap { post =>
       val combinedText = post.title + " " + post.selftext
       Analyzer.detectEntities(combinedText, dictionary)
-    }
-    .map { e => ((e.entityType, e.text), 1) }           
-    .reduceByKey((x, y) => x + y)                        
+    }.cache()
 
+    val countRDD = allEntitiesRDD
+      .map { e => ((e.entityType, e.text), 1) }           
+      .reduceByKey((x, y) => x + y)
 
     val entityCounts = countRDD.collect().toMap
-    val allEntityList = filteredPosts.flatMap { post =>
-      Analyzer.detectEntities(post.title + " " + post.selftext, dictionary)
-    }.collect().toList
+    val allEntityList = allEntitiesRDD.collect().toList
+
+    val t3 = System.currentTimeMillis()
+
+    println(s"Pipeline stage 1 (filtering + count) : ${(t1 - t0) / 1000.0} s")
+    println(s"Pipeline stage 2 (NER + aggregation) : ${(t3 - t2) / 1000.0} s")
+    println(s"Total pipeline time                  : ${(t3 - t0) / 1000.0} s")
+    println()
+
     val typeStats = Analyzer.countByType(allEntityList)
 
     println(Formatters.formatTypeStats(typeStats))
     println()
     println(Formatters.formatEntityStats(entityCounts, cmdArgs.topK))
+
+    spark.stop()
   }
 }
