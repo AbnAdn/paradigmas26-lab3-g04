@@ -95,6 +95,7 @@ object Main {
     // Paso 4: chequear si hay posts
     if (totalFilteredPosts == 0) {
       println("Error: No valid posts downloaded after filtering")
+      filteredPosts.unpersist()
       spark.stop()
       return
     }
@@ -142,6 +143,9 @@ object Main {
     println(Formatters.formatTypeStats(typeStats))
     println()
     println(Formatters.formatEntityStats(entityCounts, cmdArgs.topK))
+
+    filteredPosts.unpersist()
+    allEntitiesRDD.unpersist()
 
     spark.stop()
   }
