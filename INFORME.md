@@ -122,18 +122,21 @@ Resultados observados (medidos en una misma compu conectada a la misma red de in
 
 | Etapa                         | Versión secuencial | Versión Spark |
 |-------------------------------|-------------------|---------------|
-| Descarga de feeds + filtrado  | ~1.8 s            | ~0.08 s       |
-| Detección NER + agregación    | ~0.9 s            | ~0.4 s        |
-| Total                         | ~2.7 s            | ~0.48 s       |
+| Descarga de feeds + filtrado  | ~6.5 s            | ~5.00 s       |
+| Detección NER + agregación    | ~0.7 s            | ~0.2 s        |
+| Total                         | ~7.2 s            | ~5.2 s       |
 
-Se aprecia la diferencia y es notable especialmente en la etapa de descarga (~22x más rápido). Sin embargo, hay que interpretarla con cuidado dado el volumen de datos.
+Los resultados muestran una mejora de rendimiento al utilizar Spark. La etapa que más se beneficia es la descarga y procesamiento inicial de los feeds, ya que Spark permite distribuir el trabajo entre varios hilos de ejecución. También se observa una reducción en el tiempo requerido para la detección de entidades nombradas (NER) y el cálculo de estadísticas.
 
-La mejora en stage 1 se explica casi completamente por el paralelismo en las requests HTTP: con internet lento, el cuello de botella es la espera de cada request. Secuencial las hace una por una; Spark las lanza todas simultáneamente. Con solo 3-5 feeds la diferencia ya es enorme, y escalaría igual de bien con 100 feeds sin cambiar una línea de código.
+![CapturaSpark](SparkUI_jobs.png)
+![CapturaSpark](SparkUI_stages.png)
+![CapturaSpark](SparkUI_Executors.png)
 
-La mejora en stage 2 (NER) es más modesta (~2x) porque el dataset es pequeño (~200 posts). El overhead de Spark (serialización, scheduling de tasks, shuffle del reduceByKey) consume una fracción significativa del tiempo total. Con 10.000 posts la diferencia sería mucho más pronunciada.
+Se observan 4 jobs completados. Job 0 concentra casi todo el tiempo total (5s) ya que incluye la descarga paralela de feeds con timeouts HTTP. Los jobs 1,2 y 3 son significativamente más rápidos gracias al uso de `.cache()`: filteredPosts y allEntitiesRDD ya estaban en memoria, evitando recomputar el pipeline. Job 2 muestra 32 tasks en lugar de 16 porque el `reduceByKey` introduce un stage adicional de shuffle para reagrupar entidades por clave.
+
 
 ### ¿Justifica usar Spark para esta escala?
-Técnicamente no, el overhead fijo de inicializar Spark (~3-4s que no se mide en las etapas pero existe) supera la ganancia para datasets pequeños. Lo que sí justifica es la arquitectura: el código está preparado para escalar sin modificaciones. Si mañana el archivo de suscripciones tiene 500 feeds, la versión Spark los maneja en segundos mientras la secuencial tardaría varios minutos.
+Convenientemente si, pero aunque la diferencia no es extremadamente grande. El conjunto de datos utilizado en el laboratorio es relativamente pequeño, por lo que gran parte del tiempo total está dominado por la latencia de red y por el overhead propio de Spark.
 
 ## Ejercicio 5 - Acceso a datos y estadisticas del resultado
 
